@@ -61,7 +61,7 @@ class WebSocketServer
             }
 
             foreach ($read as $clientSocket) {
-                $command = $this->processClient($clientSocket);
+                $this->processClient($clientSocket);
             }
         }
     }
