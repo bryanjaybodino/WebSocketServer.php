@@ -15,10 +15,8 @@ class WebSocketServer
             throw new Exception("Could not create server: $errstr ($errno)");
         }
 
-        // Allow the script to run even after the client disconnects
         ignore_user_abort(true);
 
-        // Run the server in the background
         if (php_sapi_name() !== 'cli') {
             header('Connection: close');
             header('Content-Length: 0');
@@ -44,30 +42,26 @@ class WebSocketServer
         echo "Server started. Waiting for clients...\n";
 
         while ($this->isRunning) {
-            // Prepare the array of sockets to pass to stream_select
             $read = [$this->serverSocket];
             $read = array_merge($read, $this->clients);
             $write = null;
             $except = null;
 
-            // Check for socket activity
             $changedStreams = stream_select($read, $write, $except, null);
 
             if ($changedStreams === false) {
                 throw new Exception("Error during stream_select.");
             }
 
-            // Check if there's a new connection
             if (in_array($this->serverSocket, $read)) {
                 $clientSocket = stream_socket_accept($this->serverSocket);
                 $this->handleClient($clientSocket);
                 $key = array_search($this->serverSocket, $read);
-                unset($read[$key]); // Remove the server socket from the read array
+                unset($read[$key]);
             }
 
-            // Handle data from existing clients
             foreach ($read as $clientSocket) {
-                $this->processClient($clientSocket);
+                $command = $this->processClient($clientSocket);
             }
         }
     }
@@ -95,7 +89,7 @@ class WebSocketServer
 
         $handshake = $this->performHandshake($clientSocket);
         if ($handshake) {
-            $this->clients[] = $clientSocket;
+            $this->clients[(int) $clientSocket] = $clientSocket; // Use socket resource ID as key
             echo "Client connected.\n";
         } else {
             fclose($clientSocket);
@@ -122,35 +116,37 @@ class WebSocketServer
 
     private function processClient($clientSocket)
     {
+        // Check if client is disconnected
         if (feof($clientSocket)) {
-            // Client disconnected
             fclose($clientSocket);
-            $this->clients = array_filter($this->clients, function ($client) use ($clientSocket) {
-                return $client !== $clientSocket;
-            });
+            unset($this->clients[(int) $clientSocket]); // Remove the client from the list
             echo "Client disconnected.\n";
             return;
         }
 
+        // Read data from the client
         $data = fread($clientSocket, 1024);
         if ($data === false || $data === '') {
             return;
         }
 
+        // Decode the WebSocket frame
         $decodedData = $this->decodeFrame($data);
         if ($decodedData === null) {
             return;
         }
 
+        // Check if payload is valid UTF-8
         $payload = $decodedData['payload'];
         if (!mb_check_encoding($payload, 'UTF-8')) {
             echo "Invalid UTF-8 sequence.\n";
+            fclose($clientSocket); // Close the socket properly
+            unset($this->clients[(int) $clientSocket]); // Remove the client from the list
             return;
         }
 
+        // Log received message and broadcast it to other clients
         echo "Received: {$payload}\n";
-
-        // Example of broadcasting message to all clients
         $this->broadcastMessage($payload);
     }
 
