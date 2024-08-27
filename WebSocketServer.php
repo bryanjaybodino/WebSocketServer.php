@@ -166,47 +166,78 @@ class WebSocketServer
             return;
         }
 
-        // Access client data
-        $clientData = $this->clients[(int) $clientSocket];
-        $url = $clientData['url'];
-        $host = $clientData['host'];
-
         // Read data from the client
         $data = fread($clientSocket, 1024);
-        if ($data === false || $data === '') {
+
+        // Check for read errors or empty data
+        if ($data === false) {
+            echo "Read error from client.\n";
             $this->removeClient($clientSocket);
             return;
+        }
+
+        if (empty($data)) {
+            echo "No data received.\n";
+            $this->removeClient($clientSocket);
+            return; // Return here and let stream_select handle the disconnection
         }
 
         // Decode the WebSocket frame
         $decodedData = $this->decodeFrame($data);
+
+        // Check if decoding was successful
         if ($decodedData === null) {
+            echo "Failed to decode frame.\n";
             $this->removeClient($clientSocket);
-            return;
+            return; // Return here to allow further processing of potentially valid frames
         }
 
-        // Check if payload is valid UTF-8
+        // Extract payload and check if it is valid UTF-8
         $payload = $decodedData['payload'];
         if (!mb_check_encoding($payload, 'UTF-8')) {
             echo "Invalid UTF-8 sequence.\n";
             $this->removeClient($clientSocket);
-            return;
+            return; // Return here to allow further processing if necessary
         }
 
         // Log received message and broadcast it to other clients
+        $clientData = $this->clients[(int) $clientSocket];
+        $url = $clientData['url'];
+        $host = $clientData['host'];
+
         echo "Received from URL {$url} (Host: {$host}): {$payload}\n";
         $this->broadcastMessage($payload);
     }
 
-
+    // Frame decoding function
     private function decodeFrame($data)
     {
-        $length = ord($data[1]) & 127;
+        if (strlen($data) < 2) {
+            return null; // Not enough data to process
+        }
 
+        $byte1 = ord($data[0]);
+        $byte2 = ord($data[1]);
+
+        $opcode = $byte1 & 0x0F;
+        if ($opcode !== 1) {
+            // Not a text frame, ignore
+            return null;
+        }
+
+        $length = $byte2 & 127;
         if ($length == 126) {
+            if (strlen($data) < 8) {
+                return null; // Not enough data to process
+            }
+            $length = unpack('n', substr($data, 2, 2))[1];
             $masks = substr($data, 4, 4);
             $payload = substr($data, 8);
         } elseif ($length == 127) {
+            if (strlen($data) < 14) {
+                return null; // Not enough data to process
+            }
+            $length = unpack('J', substr($data, 2, 8))[1];
             $masks = substr($data, 10, 4);
             $payload = substr($data, 14);
         } else {
@@ -214,6 +245,12 @@ class WebSocketServer
             $payload = substr($data, 6);
         }
 
+        // Ensure the payload length matches the declared length
+        if (strlen($payload) !== $length) {
+            return null;
+        }
+
+        // Decode the payload
         $decoded = '';
         for ($i = 0; $i < strlen($payload); ++$i) {
             $decoded .= $payload[$i] ^ $masks[$i % 4];
@@ -223,6 +260,7 @@ class WebSocketServer
             'payload' => $decoded,
         ];
     }
+
 
     private function broadcastMessage($message)
     {
