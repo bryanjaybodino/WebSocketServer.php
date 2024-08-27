@@ -43,7 +43,7 @@ class WebSocketServer
 
         while ($this->isRunning) {
             $read = [$this->serverSocket];
-            $read = array_merge($read, $this->clients);
+            $read = array_merge($read, array_column($this->clients, 'socket'));
             $write = null;
             $except = null;
 
@@ -55,7 +55,9 @@ class WebSocketServer
 
             if (in_array($this->serverSocket, $read)) {
                 $clientSocket = stream_socket_accept($this->serverSocket);
-                $this->handleClient($clientSocket);
+                if ($clientSocket) {
+                    $this->handleClient($clientSocket);
+                }
                 $key = array_search($this->serverSocket, $read);
                 unset($read[$key]);
             }
@@ -72,7 +74,7 @@ class WebSocketServer
         fclose($this->serverSocket);
 
         foreach ($this->clients as $client) {
-            fclose($client);
+            fclose($client['socket']);
         }
 
         $this->clients = [];
@@ -82,15 +84,45 @@ class WebSocketServer
     private function handleClient($clientSocket)
     {
         if ($this->serverCertificate) {
-            stream_context_set_option($clientSocket, 'ssl', 'local_cert', $this->serverCertificate['local_cert']);
-            stream_context_set_option($clientSocket, 'ssl', 'passphrase', $this->serverCertificate['passphrase']);
+            $context = stream_context_create([
+                'ssl' => $this->serverCertificate,
+            ]);
             stream_socket_enable_crypto($clientSocket, true, STREAM_CRYPTO_METHOD_TLS_SERVER);
         }
 
-        $handshake = $this->performHandshake($clientSocket);
-        if ($handshake) {
-            $this->clients[(int) $clientSocket] = $clientSocket; // Use socket resource ID as key
-            echo "Client connected.\n";
+        // Read the request from the client
+        $request = '';
+        while (($line = fgets($clientSocket)) && rtrim($line) !== '') {
+            $request .= $line;
+        }
+
+        // Debugging: Print raw request
+        echo "Raw Request:\n$request\n";
+
+        // Extract the request line (e.g., "GET /path?query=value HTTP/1.1")
+        $requestLines = explode("\r\n", $request);
+        $requestLine = $requestLines[0];
+
+        // Extract URL and query string
+        $url = '';
+        $host = '';
+        if (preg_match("/GET (.*?) HTTP/", $requestLine, $matches)) {
+            $url = trim($matches[1]);
+        }
+        if (preg_match("/Host: (.*)\r\n/", $request, $matches)) {
+            $host = trim($matches[1]);
+        }
+
+        // Remove leading '/' from URL if present
+        $url = ltrim($url, '/');
+
+        // Perform WebSocket handshake
+        if ($this->performHandshake($clientSocket, $request)) {
+            $this->clients[(int) $clientSocket] = [
+                'socket' => $clientSocket,
+                'host' => 'ws://'.$host . $url,
+            ];
+            echo "Client connected with URL: $url and Host: $host.\n";
         } else {
             fclose($clientSocket);
             echo "Client handshake failed.\n";
@@ -99,41 +131,8 @@ class WebSocketServer
 
 
 
-    private function performHandshake($clientSocket)
+    private function performHandshake($clientSocket, $request)
     {
-        // Read the request from the client
-        $request = '';
-        while (($line = fgets($clientSocket)) && rtrim($line) !== '') {
-            $request .= $line;
-        }
-
-        // Split the request into lines
-        $lines = explode("\r\n", $request);
-
-        // Extract the request line (e.g., GET /path HTTP/1.1)
-        $requestLine = array_shift($lines);
-        $url = '';
-        if (preg_match('/GET\s+(.*?)\s+HTTP/', $requestLine, $matches)) {
-            $url = $matches[1];
-        }
-
-        // Extract the Host header
-        $host = '';
-        foreach ($lines as $line) {
-            if (preg_match('/^Host:\s*(.*)$/i', $line, $matches)) {
-                $host = trim($matches[1]);
-                break;
-            }
-        }
-
-        // Store the URL and Host in the clients array
-        $this->clients[(int) $clientSocket] = [
-            'socket' => $clientSocket,
-            'url' => $url,
-            'host' => $host
-        ];
-
-        // Handle the WebSocket key and perform the handshake
         if (preg_match("/Sec-WebSocket-Key: (.*)\r\n/", $request, $matches)) {
             $key = trim($matches[1]);
             $acceptKey = base64_encode(pack('H*', sha1($key . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')));
@@ -145,10 +144,8 @@ class WebSocketServer
             fwrite($clientSocket, $response);
             return true;
         }
-
         return false;
     }
-
 
     private function processClient($clientSocket)
     {
@@ -179,7 +176,7 @@ class WebSocketServer
         if (empty($data)) {
             echo "No data received.\n";
             $this->removeClient($clientSocket);
-            return; // Return here and let stream_select handle the disconnection
+            return; // Allow stream_select to handle disconnection
         }
 
         // Decode the WebSocket frame
@@ -189,7 +186,7 @@ class WebSocketServer
         if ($decodedData === null) {
             echo "Failed to decode frame.\n";
             $this->removeClient($clientSocket);
-            return; // Return here to allow further processing of potentially valid frames
+            return; // Allow further processing of potentially valid frames
         }
 
         // Extract payload and check if it is valid UTF-8
@@ -197,19 +194,15 @@ class WebSocketServer
         if (!mb_check_encoding($payload, 'UTF-8')) {
             echo "Invalid UTF-8 sequence.\n";
             $this->removeClient($clientSocket);
-            return; // Return here to allow further processing if necessary
+            return; // Allow further processing if necessary
         }
 
         // Log received message and broadcast it to other clients
         $clientData = $this->clients[(int) $clientSocket];
-        $url = $clientData['url'];
         $host = $clientData['host'];
-
-        echo "Received from URL {$url} (Host: {$host}): {$payload}\n";
         $this->broadcastMessage($payload);
     }
 
-    // Frame decoding function
     private function decodeFrame($data)
     {
         if (strlen($data) < 2) {
@@ -261,17 +254,15 @@ class WebSocketServer
         ];
     }
 
-
     private function broadcastMessage($message)
     {
         // Check if the message is not empty
         if (trim($message) !== '') {
             foreach ($this->clients as $client) {
-                fwrite($client, $this->encodeFrame($message));
+                fwrite($client['socket'], $this->encodeFrame($message));
             }
         }
     }
-
 
     private function encodeFrame($payload)
     {
@@ -300,7 +291,6 @@ class WebSocketServer
         return implode('', $frameHead) . $payload;
     }
 
-
     private function joinRoom($client, $roomId)
     {
         $clientId = (int) $client;
@@ -318,6 +308,4 @@ class WebSocketServer
         fclose($clientSocket); // Close the socket properly
         unset($this->clients[(int) $clientSocket]); // Remove the client from the list
     }
-
 }
-
