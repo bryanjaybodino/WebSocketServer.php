@@ -264,10 +264,14 @@ class WebSocketServer
 
     private function broadcastMessage($message)
     {
-        foreach ($this->clients as $client) {
-            fwrite($client, $this->encodeFrame($message));
+        // Check if the message is not empty
+        if (trim($message) !== '') {
+            foreach ($this->clients as $client) {
+                fwrite($client, $this->encodeFrame($message));
+            }
         }
     }
+
 
     private function encodeFrame($payload)
     {
