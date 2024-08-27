@@ -154,8 +154,7 @@ class WebSocketServer
     {
         // Check if client is disconnected
         if (feof($clientSocket)) {
-            fclose($clientSocket);
-            unset($this->clients[(int) $clientSocket]); // Remove the client from the list
+            $this->removeClient($clientSocket);
             echo "Client disconnected.\n";
             return;
         }
@@ -163,6 +162,7 @@ class WebSocketServer
         // Check if client exists in the list
         if (!isset($this->clients[(int) $clientSocket])) {
             echo "Client not found.\n";
+            $this->removeClient($clientSocket);
             return;
         }
 
@@ -174,12 +174,14 @@ class WebSocketServer
         // Read data from the client
         $data = fread($clientSocket, 1024);
         if ($data === false || $data === '') {
+            $this->removeClient($clientSocket);
             return;
         }
 
         // Decode the WebSocket frame
         $decodedData = $this->decodeFrame($data);
         if ($decodedData === null) {
+            $this->removeClient($clientSocket);
             return;
         }
 
@@ -187,8 +189,7 @@ class WebSocketServer
         $payload = $decodedData['payload'];
         if (!mb_check_encoding($payload, 'UTF-8')) {
             echo "Invalid UTF-8 sequence.\n";
-            fclose($clientSocket); // Close the socket properly
-            unset($this->clients[(int) $clientSocket]); // Remove the client from the list
+            $this->removeClient($clientSocket);
             return;
         }
 
@@ -268,6 +269,12 @@ class WebSocketServer
         $this->rooms[$roomId][] = $this->clients[$clientId]['socket'];
         $this->clients[$clientId]['room'] = $roomId;
         echo "Client joined room $roomId.\n";
+    }
+
+    private function removeClient($clientSocket)
+    {
+        fclose($clientSocket); // Close the socket properly
+        unset($this->clients[(int) $clientSocket]); // Remove the client from the list
     }
 
 }
