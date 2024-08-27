@@ -120,7 +120,7 @@ class WebSocketServer
         if ($this->performHandshake($clientSocket, $request)) {
             $this->clients[(int) $clientSocket] = [
                 'socket' => $clientSocket,
-                'host' => 'ws://'.$host . $url,
+                'host' => 'ws://' . $host . $url,
             ];
             echo "Client connected with URL: $url and Host: $host.\n";
         } else {
@@ -128,8 +128,6 @@ class WebSocketServer
             echo "Client handshake failed.\n";
         }
     }
-
-
 
     private function performHandshake($clientSocket, $request)
     {
@@ -200,7 +198,7 @@ class WebSocketServer
         // Log received message and broadcast it to other clients
         $clientData = $this->clients[(int) $clientSocket];
         $host = $clientData['host'];
-        $this->broadcastMessage($payload);
+        $this->broadcastMessage($payload, $host);
     }
 
     private function decodeFrame($data)
@@ -254,12 +252,15 @@ class WebSocketServer
         ];
     }
 
-    private function broadcastMessage($message)
+    private function broadcastMessage($message, $senderHost)
     {
         // Check if the message is not empty
         if (trim($message) !== '') {
             foreach ($this->clients as $client) {
-                fwrite($client['socket'], $this->encodeFrame($message));
+                // Only send the message to clients with the same host URL as the sender
+                if ($client['host'] === $senderHost) {
+                    fwrite($client['socket'], $this->encodeFrame($message));
+                }
             }
         }
     }
