@@ -97,9 +97,43 @@ class WebSocketServer
         }
     }
 
+
+
     private function performHandshake($clientSocket)
     {
-        $request = fread($clientSocket, 1024);
+        // Read the request from the client
+        $request = '';
+        while (($line = fgets($clientSocket)) && rtrim($line) !== '') {
+            $request .= $line;
+        }
+
+        // Split the request into lines
+        $lines = explode("\r\n", $request);
+
+        // Extract the request line (e.g., GET /path HTTP/1.1)
+        $requestLine = array_shift($lines);
+        $url = '';
+        if (preg_match('/GET\s+(.*?)\s+HTTP/', $requestLine, $matches)) {
+            $url = $matches[1];
+        }
+
+        // Extract the Host header
+        $host = '';
+        foreach ($lines as $line) {
+            if (preg_match('/^Host:\s*(.*)$/i', $line, $matches)) {
+                $host = trim($matches[1]);
+                break;
+            }
+        }
+
+        // Store the URL and Host in the clients array
+        $this->clients[(int) $clientSocket] = [
+            'socket' => $clientSocket,
+            'url' => $url,
+            'host' => $host
+        ];
+
+        // Handle the WebSocket key and perform the handshake
         if (preg_match("/Sec-WebSocket-Key: (.*)\r\n/", $request, $matches)) {
             $key = trim($matches[1]);
             $acceptKey = base64_encode(pack('H*', sha1($key . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')));
@@ -111,8 +145,10 @@ class WebSocketServer
             fwrite($clientSocket, $response);
             return true;
         }
+
         return false;
     }
+
 
     private function processClient($clientSocket)
     {
@@ -123,6 +159,17 @@ class WebSocketServer
             echo "Client disconnected.\n";
             return;
         }
+
+        // Check if client exists in the list
+        if (!isset($this->clients[(int) $clientSocket])) {
+            echo "Client not found.\n";
+            return;
+        }
+
+        // Access client data
+        $clientData = $this->clients[(int) $clientSocket];
+        $url = $clientData['url'];
+        $host = $clientData['host'];
 
         // Read data from the client
         $data = fread($clientSocket, 1024);
@@ -146,7 +193,7 @@ class WebSocketServer
         }
 
         // Log received message and broadcast it to other clients
-        echo "Received: {$payload}\n";
+        echo "Received from URL {$url} (Host: {$host}): {$payload}\n";
         $this->broadcastMessage($payload);
     }
 
@@ -209,5 +256,19 @@ class WebSocketServer
 
         return implode('', $frameHead) . $payload;
     }
+
+
+    private function joinRoom($client, $roomId)
+    {
+        $clientId = (int) $client;
+        if (!isset($this->rooms[$roomId])) {
+            $this->rooms[$roomId] = [];
+        }
+
+        $this->rooms[$roomId][] = $this->clients[$clientId]['socket'];
+        $this->clients[$clientId]['room'] = $roomId;
+        echo "Client joined room $roomId.\n";
+    }
+
 }
 
