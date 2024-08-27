@@ -4,7 +4,6 @@ class WebSocketServer
 {
     private $serverSocket;
     private $clients = [];
-    private $rooms = [];
     private $isRunning = false;
     private $serverCertificate;
 
@@ -291,19 +290,6 @@ class WebSocketServer
 
         return implode('', $frameHead) . $payload;
     }
-
-    private function joinRoom($client, $roomId)
-    {
-        $clientId = (int) $client;
-        if (!isset($this->rooms[$roomId])) {
-            $this->rooms[$roomId] = [];
-        }
-
-        $this->rooms[$roomId][] = $this->clients[$clientId]['socket'];
-        $this->clients[$clientId]['room'] = $roomId;
-        echo "Client joined room $roomId.\n";
-    }
-
     private function removeClient($clientSocket)
     {
         fclose($clientSocket); // Close the socket properly
