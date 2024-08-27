@@ -119,7 +119,7 @@ class WebSocketServer
         if ($this->performHandshake($clientSocket, $request)) {
             $this->clients[(int) $clientSocket] = [
                 'socket' => $clientSocket,
-                'host' => 'ws://' . $host . $url,
+                'host' => $url, //'ws://' . $host . $url,
             ];
             echo "Client connected with URL: $url and Host: $host.\n";
         } else {
